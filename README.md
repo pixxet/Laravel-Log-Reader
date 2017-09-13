@@ -16,7 +16,7 @@ Laravel Log Reader is an easy log reader and management tool for Laravel. You ca
 - Allows to use your own log parser.
 
 # Documentation
-Look at [here](https://github.com/JackieDo/Laravel-Log-Reader/wiki) to learn more about Laravel Log Reader
+Look at [here](https://github.com/Pixxet/Laravel-Log-Reader/wiki) to learn more about Laravel Log Reader
 
 # Screenshot
 Here are some screenshots on how to use Laravel Log Reader in actual project. Keep in mind that this package does not include interface resources. Building user interfaces is up to each app developer.
