@@ -9,6 +9,7 @@ use Jackiedo\LogReader\Contracts\LogParser as LogParserInterface;
 use Jackiedo\LogReader\Entities\LogEntry;
 use Jackiedo\LogReader\Exceptions\UnableToRetrieveLogFilesException;
 use Jackiedo\LogReader\Levelable;
+use Storage;
 
 /**
  * The LogReader class.
@@ -77,6 +78,13 @@ class LogReader
     protected $path = '';
 
     /**
+     * The disk the log files directory stored on.
+     *
+     * @var string
+     */
+    protected $disk = '';
+
+    /**
      * Stores the filename to search log files for.
      *
      * @var string
@@ -128,6 +136,7 @@ class LogReader
         $this->levelable = new Levelable;
         $this->parser    = new LogParser;
 
+        $this->setLogDisk($this->config->get('log-reader.disk', 'base'));
         $this->setLogPath($this->config->get('log-reader.path', storage_path('logs')));
         $this->setLogFilename($this->config->get('log-reader.filename', 'laravel.log'));
         $this->setEnvironment($this->config->get('log-reader.environment'));
@@ -146,6 +155,18 @@ class LogReader
     public function setLogPath($path)
     {
         $this->path = $path;
+    }
+
+    /**
+     * Sets the disk the directory storing the log files is on.
+     *
+     * @param  string  $path
+     *
+     * @return void
+     */
+    public function setLogDisk($disk)
+    {
+        $this->disk = $disk;
     }
 
     /**
@@ -228,6 +249,16 @@ class LogReader
     public function getLogPath()
     {
         return $this->path;
+    }
+
+    /**
+     * Retrieves the path to directory storing the log files.
+     *
+     * @return string
+     */
+    public function getLogDisk()
+    {
+        return $this->disk;
     }
 
     /**
@@ -341,8 +372,8 @@ class LogReader
 
         $files = $this->getLogFiles();
 
-        if (! is_array($files)) {
-            throw new UnableToRetrieveLogFilesException('Unable to retrieve files from path: '.$this->getLogPath());
+        if (!is_array($files)) {
+            throw new UnableToRetrieveLogFilesException('Unable to retrieve files from path: ' . $this->getLogPath());
         }
 
         foreach ($files as $log) {
@@ -515,7 +546,7 @@ class LogReader
 
         if (is_array($files)) {
             foreach ($files as $file) {
-                $basename = pathinfo($file, PATHINFO_BASENAME);
+                $basename        = pathinfo($file, PATHINFO_BASENAME);
                 $data[$basename] = $file;
             }
         }
@@ -568,7 +599,7 @@ class LogReader
             'date',
             'level',
             'environment',
-            'file_path'
+            'file_path',
         ];
 
         if (in_array($field, $acceptedFields)) {
@@ -711,13 +742,13 @@ class LogReader
 
         foreach ($parsed_headerSet as $key => $header) {
             if (empty($parsed_dateSet[$key])) {
-                $parsed_dateSet[$key]  = $parsed_dateSet[$key-1];
-                $parsed_envSet[$key]   = $parsed_envSet[$key-1];
-                $parsed_levelSet[$key] = $parsed_levelSet[$key-1];
-                $header                = str_replace("Next", $parsed_headerSet[$key-1], $header);
+                $parsed_dateSet[$key]  = $parsed_dateSet[$key - 1];
+                $parsed_envSet[$key]   = $parsed_envSet[$key - 1];
+                $parsed_levelSet[$key] = $parsed_levelSet[$key - 1];
+                $header                = str_replace("Next", $parsed_headerSet[$key - 1], $header);
             }
 
-            $newContent .= $header.' '.$parsed_bodySet[$key];
+            $newContent .= $header . ' ' . $parsed_bodySet[$key];
 
             if ((empty($allowedEnvironment) || $allowedEnvironment == $parsed_envSet[$key]) && $this->levelable->filter($parsed_levelSet[$key], $allowedLevel)) {
                 $log[] = [
@@ -726,7 +757,7 @@ class LogReader
                     'date'        => $parsed_dateSet[$key],
                     'file_path'   => $this->getCurrentLogPath(),
                     'header'      => $header,
-                    'body'        => $parsed_bodySet[$key]
+                    'body'        => $parsed_bodySet[$key],
                 ];
             }
         }
@@ -753,8 +784,8 @@ class LogReader
             $count = 0;
 
             foreach ($files as $file) {
-                $data[$count]['contents'] = file_get_contents($file);
-                $data[$count]['path'] = $file;
+                $data[$count]['contents'] = Storage::disk('riskchecks')->get($file);
+                $data[$count]['path']     = $file;
                 $count++;
             }
 
@@ -775,22 +806,24 @@ class LogReader
     {
         $path = $this->getLogPath();
 
-        if (is_dir($path)) {
+        return Storage::disk($this->getLogDisk())->path($path)->allFiles();
 
-            /*
-             * Matches files in the log directory with the special name'
-             */
-            $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $this->getLogFilename());
+        // if (is_dir($path)) {
 
-            /*
-             * Force matches all files in the log directory'
-             */
-            if (!is_null($forceName)) {
-                $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $forceName);
-            }
+        //    /*
+        //     * Matches files in the log directory with the special name'
+        //     */
+        //    $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $this->getLogFilename());
 
-            return glob($logPath, GLOB_BRACE);
-        }
+        //    /*
+        //     * Force matches all files in the log directory'
+        //     */
+        //    if (!is_null($forceName)) {
+        //        $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $forceName);
+        //    }
+
+        //    return glob($logPath, GLOB_BRACE);
+        //}
 
         return false;
     }
