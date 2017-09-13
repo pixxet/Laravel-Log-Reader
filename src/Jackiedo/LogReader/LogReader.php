@@ -1,174 +1,830 @@
-<?php
+<?php namespace Jackiedo\LogReader;
 
-namespace App\Modules\RSSRiskcheckMonitoring\Helpers\Reader;
-
-use App\Helpers\HelpersCore;
-use Carbon\Carbon;
-use DB;
-use LogReader;
-use Pi;
+use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
+use Jackiedo\LogReader\Contracts\LogParser as LogParserInterface;
+use Jackiedo\LogReader\Entities\LogEntry;
+use Jackiedo\LogReader\Exceptions\UnableToRetrieveLogFilesException;
+use Jackiedo\LogReader\Levelable;
 use Storage;
 
-class Reader extends HelpersCore
+/**
+ * The LogReader class.
+ *
+ * @package Jackiedo\LogReader
+ * @author Jackie Do <anhvudo@gmail.com>
+ * @copyright 2017
+ * @access public
+ */
+class LogReader
 {
-    protected $cogs;
-    protected $payment_types;
-    protected $riskcheck_payments_table;
+    /**
+     * Store instance of Cache Repository for caching
+     *
+     * @var \Illuminate\Cache\Repository
+     */
+    protected $cache;
 
-    public function __construct()
+    /**
+     * Store instance of Config Repository for working with config
+     *
+     * @var \Illuminate\Config\Repository
+     */
+    protected $config;
+
+    /**
+     * Store instance of Request for getting request input
+     *
+     * @var \Illuminate\Http\Request
+     */
+    protected $request;
+
+    /**
+     * Store instance of LogParser for parsing content of the log file
+     *
+     * @var \Jackiedo\LogReader\LogParser
+     */
+    protected $parser;
+
+    /**
+     * Store instance of Levelable to filter logs entry by level
+     *
+     * @var \Jackiedo\LogReader\Levelable
+     */
+    protected $levelable;
+
+    /**
+     * Stores the current environment to sort the log entries.
+     *
+     * @var string
+     */
+    protected $environment = null;
+
+    /**
+     * Stores the current level to sort the log entries.
+     *
+     * @var null|array
+     */
+    protected $level = null;
+
+    /**
+     * The path to directory storing the log files.
+     *
+     * @var string
+     */
+    protected $path = '';
+
+    /**
+     * The disk the log files directory stored on.
+     *
+     * @var string
+     */
+    protected $disk = '';
+
+    /**
+     * Stores the filename to search log files for.
+     *
+     * @var string
+     */
+    protected $filename = '';
+
+    /**
+     * The current log file path.
+     *
+     * @var string
+     */
+    protected $currentLogPath = '';
+
+    /**
+     * Stores the field to order the log entries in.
+     *
+     * @var string
+     */
+    protected $orderByField = '';
+
+    /**
+     * Stores the direction to order the log entries in.
+     *
+     * @var string
+     */
+    protected $orderByDirection = '';
+
+    /**
+     * Stores the bool whether or not to return read entries.
+     *
+     * @var bool
+     */
+    protected $includeRead = false;
+
+    /**
+     * Construct a new instance and set attributes.
+     *
+     * @param  object  $cache
+     * @param  object  $config
+     * @param  object  $request
+     *
+     * @return void
+     */
+    public function __construct(Cache $cache, Config $config, Request $request)
     {
+        $this->cache     = $cache;
+        $this->config    = $config;
+        $this->request   = $request;
+        $this->levelable = new Levelable;
+        $this->parser    = new LogParser;
 
-        $this->cogs = json_decode(Pi::Helper('RSSRiskcheckMonitoring::Settings')->getRSSCogs());
+        $this->setLogDisk($this->config->get('log-reader.disk', 'base'));
+        $this->setLogPath($this->config->get('log-reader.path', storage_path('logs')));
+        $this->setLogFilename($this->config->get('log-reader.filename', 'laravel.log'));
+        $this->setEnvironment($this->config->get('log-reader.environment'));
+        $this->setLevel($this->config->get('log-reader.level'));
+        $this->setOrderByField($this->config->get('log-reader.order_by_field', ''));
+        $this->setOrderByDirection($this->config->get('log-reader.order_by_direction', ''));
+    }
 
-        foreach ($this->cogs->DEFAULT as $key => $value) {
-            Pi::Model('RSSRiskcheckMonitoring::Payment')->firstOrCreate([
-                'name' => $key,
-            ]);
+    /**
+     * Sets the path to directory storing the log files.
+     *
+     * @param  string  $path
+     *
+     * @return void
+     */
+    public function setLogPath($path)
+    {
+        $this->path = $path;
+    }
+
+    /**
+     * Sets the disk the directory storing the log files is on.
+     *
+     * @param  string  $path
+     *
+     * @return void
+     */
+    public function setLogDisk($disk)
+    {
+        $this->disk = $disk;
+    }
+
+    /**
+     * Setting the parser for structural analysis
+     *
+     * @param  object $parser
+     *
+     * @return void
+     */
+    public function setLogParser(LogParserInterface $parser)
+    {
+        $this->parser = $parser;
+    }
+
+    /**
+     * Get instance of Levelable
+     *
+     * @return \Jackiedo\LogReader\Levelable
+     */
+    public function getLevelable()
+    {
+        return $this->levelable;
+    }
+
+    /**
+     * Retrieves the orderByField property.
+     *
+     * @return string
+     */
+    public function getOrderByField()
+    {
+        return $this->orderByField;
+    }
+
+    /**
+     * Retrieves the orderByDirection property.
+     *
+     * @return string
+     */
+    public function getOrderByDirection()
+    {
+        return $this->orderByDirection;
+    }
+
+    /**
+     * Retrieves the environment property.
+     *
+     * @return string
+     */
+    public function getEnvironment()
+    {
+        return $this->environment;
+    }
+
+    /**
+     * Retrieves the level property.
+     *
+     * @return array
+     */
+    public function getLevel()
+    {
+        return $this->level;
+    }
+
+    /**
+     * Retrieves the currentLogPath property.
+     *
+     * @return string
+     */
+    public function getCurrentLogPath()
+    {
+        return $this->currentLogPath;
+    }
+
+    /**
+     * Retrieves the path to directory storing the log files.
+     *
+     * @return string
+     */
+    public function getLogPath()
+    {
+        return $this->path;
+    }
+
+    /**
+     * Retrieves the path to directory storing the log files.
+     *
+     * @return string
+     */
+    public function getLogDisk()
+    {
+        return $this->disk;
+    }
+
+    /**
+     * Retrieves the log filename property.
+     *
+     * @return string
+     */
+    public function getLogFilename()
+    {
+        return $this->filename;
+    }
+
+    /**
+     * Sets the environment to sort the log entries by.
+     *
+     * @param  string  $environment
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function environment($environment)
+    {
+        $this->setEnvironment($environment);
+
+        return $this;
+    }
+
+    /**
+     * Sets the level to sort the log entries by.
+     *
+     * @param  mixed  $level
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function level($level)
+    {
+        if (empty($level)) {
+            $level = [];
+        } elseif (is_string($level)) {
+            $level = explode(',', str_replace(' ', '', $level));
+        } else {
+            $level = is_array($level) ? $level : func_get_args();
         }
 
-        $this->payment_types = Pi::Model('RSSRiskcheckMonitoring::Payment')->pluck('id', 'name');
+        $this->setLevel($level);
 
-        $this->riskcheck_payments_table = with(Pi::Model('RSSRiskcheckMonitoring::Riskcheck\RiskcheckPayment'))->getTable();
-
-        parent::__construct();
+        return $this;
     }
-    /**
-     * fill/re-fill riskchecks from the rss riskcheck log files
-     *
-     * @return null
-     */
-    public function fillLogFiles()
-    {
 
-        //get files from the storage disk, value of the riskchecks path was saved over the module provider
-        $files = Storage::disk('riskchecks')->allFiles();
+    /**
+     * Sets the filename to get log entries.
+     *
+     * @param  string  $filename
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function filename($filename)
+    {
+        $this->setLogFilename($filename);
+
+        return $this;
+    }
+
+    /**
+     * Includes read entries in the log results.
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function withRead()
+    {
+        $this->setIncludeRead(true);
+
+        return $this;
+    }
+
+    /**
+     * Alias of the withRead() method.
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function includeRead()
+    {
+        return $this->withRead();
+    }
+
+    /**
+     * Sets the direction to return the log entries in.
+     *
+     * @param  string  $field
+     * @param  string  $direction
+     *
+     * @return \Jackiedo\LogReader\LogReader
+     */
+    public function orderBy($field, $direction = 'asc')
+    {
+        $this->setOrderByField($field);
+        $this->setOrderByDirection($direction);
+
+        return $this;
+    }
+
+    /**
+     * Returns a Laravel collection of log entries.
+     *
+     * @throws \Jackiedo\LogReader\Exceptions\UnableToRetrieveLogFilesException
+     *
+     * @return Collection
+     */
+    public function get()
+    {
+        $entries = [];
+
+        $files = $this->getLogFiles();
+
+        if (!is_array($files)) {
+            throw new UnableToRetrieveLogFilesException('Unable to retrieve files from path: ' . $this->getLogPath());
+        }
+
+        foreach ($files as $log) {
+            /*
+             * Set the current log path for easy manipulation
+             * of the file if needed
+             */
+            $this->setCurrentLogPath($log['path']);
+
+            /*
+             * Parse the log into an array of entries, passing in the level
+             * so it can be filtered
+             */
+            $parsedLog = $this->parseLog($log['contents'], $this->getEnvironment(), $this->getLevel());
+
+            /*
+             * Create a new LogEntry object for each parsed log entry
+             */
+            foreach ($parsedLog as $entry) {
+                $newEntry = new LogEntry($this->parser, $this->cache, $entry);
+
+                /*
+                 * Check if the entry has already been read,
+                 * and if read entries should be included.
+                 *
+                 * If includeRead is false, and the entry is read,
+                 * then continue processing.
+                 */
+                if (!$this->includeRead && $newEntry->isRead()) {
+                    continue;
+                }
+
+                $entries[$newEntry->id] = $newEntry;
+            }
+        }
+
+        return $this->postCollectionModifiers(new Collection($entries));
+    }
+
+    /**
+     * Returns total of log entries.
+     *
+     * @return int
+     */
+    public function count()
+    {
+        return $this->get()->count();
+    }
+
+    /**
+     * Finds a logged error by it's ID.
+     *
+     * @param  string  $id
+     *
+     * @return mixed|null
+     */
+    public function find($id = '')
+    {
+        return $this->get()->get($id);
+    }
+
+    /**
+     * Marks all retrieved log entries as read and
+     * returns the number of entries that have been marked.
+     *
+     * @return int
+     */
+    public function markAsRead()
+    {
+        $entries = $this->get();
+
+        $count = 0;
+
+        foreach ($entries as $entry) {
+            if ($entry->markAsRead()) {
+                ++$count;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Alias of the markAsRead() method.
+     *
+     * @return int
+     */
+    public function markRead()
+    {
+        return $this->markAsRead();
+    }
+
+    /**
+     * Deletes all retrieved log entries and returns
+     * the number of entries that have been deleted.
+     *
+     * @return int
+     */
+    public function delete()
+    {
+        $entries = $this->get();
+
+        $count = 0;
+
+        foreach ($entries as $entry) {
+            if ($entry->delete()) {
+                ++$count;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Deletes all retrieved log entries and returns
+     * the number of entries that have been deleted.
+     *
+     * @return int
+     */
+    public function removeLogFile()
+    {
+        $files = $this->getLogFileList();
+
+        $count = 0;
 
         foreach ($files as $file) {
-
-            // select file model or create new WITHOUT saving to db
-            $file = Pi::Model('RSSRiskcheckMonitoring::Riskcheck\RiskcheckFile')->firstOrNew(['filename' => $file]);
-
-            $riskchecks = $this->parseFile($file->filename);
-
-            // if file exists in the db compare its riskchecks, true => delete and refill, false => save and fill
-            if ($file->exists && $riskchecks->count() != $file->riskchecks()->count()) {
-                $file->riskchecks()->delete();
-                $this->injectRiskcheks($riskchecks, $file);
-            } else if (!$file->exists) {
-                $file->save();
-                $this->injectRiskcheks($riskchecks, $file);
+            if (@unlink($file)) {
+                ++$count;
             }
+        }
 
-            $timeouts = $this->parseTimeOutFile($file->filename);
+        return $count;
+    }
 
-            if ($timeouts->count()) {
-                $this->injectTimeouts($timeouts, $file);
+    /**
+     * Paginates the returned log entries.
+     *
+     * @param  int    $perPage
+     * @param  int    $currentPage
+     * @param  array  $options  [path => '', query => [], fragment => '', pageName => '']
+     *
+     * @return mixed
+     */
+    public function paginate($perPage = 25, $currentPage = null, array $options = [])
+    {
+        $currentPage = $this->getPageFromInput($currentPage, $options);
+        $offset      = ($currentPage - 1) * $perPage;
+        $total       = $this->count();
+        $entries     = $this->get()->slice($offset, $perPage)->all();
+
+        return new LengthAwarePaginator($entries, $total, $perPage, $currentPage, $options);
+    }
+
+    /**
+     * Returns an array of log filenames.
+     *
+     * @param  null|string  $filename
+     *
+     * @return array
+     */
+    public function getLogFilenameList($filename = null)
+    {
+        $data = [];
+
+        if (empty($filename)) {
+            $filename = '*.*';
+        }
+
+        $files = $this->getLogFileList($filename);
+
+        if (is_array($files)) {
+            foreach ($files as $file) {
+                $basename        = pathinfo($file, PATHINFO_BASENAME);
+                $data[$basename] = $file;
             }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Sets the currentLogPath property to
+     * the specified path.
+     *
+     * @param  string  $path
+     *
+     * @return void
+     */
+    protected function setCurrentLogPath($path)
+    {
+        $this->currentLogPath = $path;
+    }
+
+    /**
+     * Sets the log filename to retrieve the logs data from.
+     *
+     * @param  string  $filename
+     *
+     * @return void
+     */
+    protected function setLogFilename($filename)
+    {
+        if (empty($filename)) {
+            $this->filename = '*.*';
+        } else {
+            $this->filename = $filename;
         }
     }
 
     /**
-     * parsing riskcheck log files
-     * @param  String  $filepath
-     * @return LogReader object with parsed specific log file
+     * Sets the orderByField property to the specified field.
+     *
+     * @param  string  $field
+     *
+     * @return void
      */
-    protected function parseFile($filepath)
+    protected function setOrderByField($field)
     {
-        // get module logParser
-        $parser = new \App\Modules\RSSRiskcheckMonitoring\Classes\LogParser;
-        //set the logParser
-        LogReader::setLogParser($parser);
-        //set the log path, value was saved over the module provider
-        LogReader::setLogPath(Storage::disk('riskchecks')->path(null));
+        $field = strtolower($field);
 
-        // return the parsed Log file
-        return LogReader::filename($filepath)->get();
+        $acceptedFields = [
+            'id',
+            'date',
+            'level',
+            'environment',
+            'file_path',
+        ];
+
+        if (in_array($field, $acceptedFields)) {
+            $this->orderByField = $field;
+        }
     }
 
     /**
-     * injecting riskchecks
-     * @param  Illuminate\Support\Collection  $riskchecks
-     * @param  App\Modules\RSSRiskcheckMonitoring\Models\Riskcheck\RiskcheckFile  $file
-     * @return null
+     * Sets the orderByDirection property to the specified direction.
+     *
+     * @param  string  $direction
+     *
+     * @return void
      */
-    protected function injectRiskcheks($riskchecks, $file)
+    protected function setOrderByDirection($direction)
     {
+        $direction = strtolower($direction);
 
-        foreach ($riskchecks as $riskcheck) {
+        if ($direction == 'desc' || $direction == 'asc') {
+            $this->orderByDirection = $direction;
+        }
+    }
 
-            // decode json body context
-            $context = json_decode($riskcheck->getAttribute('context'));
+    /**
+     * Sets the environment property to the specified environment.
+     *
+     * @param  string  $environment
+     *
+     * @return void
+     */
+    protected function setEnvironment($environment)
+    {
+        $this->environment = $environment;
+    }
 
-            // get payments Configurations based on result code
-            $payments = (isset($this->cogs->{$context->decision->resultCode}) ? $this->cogs->{$context->decision->resultCode} : $this->cogs->DEFAULT);
+    /**
+     * Sets the level property to the specified level.
+     *
+     * @param  array  $level
+     *
+     * @return void
+     */
+    protected function setLevel($level)
+    {
+        if (is_array($level)) {
+            $this->level = $level;
+        }
+    }
 
-            // create Model
-            $riskcheck = [
-                'file_id'              => $file->id,
-                'result_code'          => $context->decision->resultCode,
-                'new_customer_request' => $context->decision->isNewCustomer,
-                'requestTime'          => Carbon::createFromFormat('Y-m-d H:i:s', $riskcheck->date, 'GMT'),
-                'payments'             => $payments,
-            ];
-            $riskcheck = Pi::Model('RSSRiskcheckMonitoring::Riskcheck')->create($riskcheck);
+    /**
+     * Sets the includeRead property.
+     *
+     * @param  bool  $bool
+     *
+     * @return void
+     */
+    protected function setIncludeRead($bool = false)
+    {
+        $this->includeRead = $bool;
+    }
 
-            if ($riskcheck) {
-                $payments_insert = [];
-                foreach ($payments as $key => $value) {
-                    if ($value) {
-                        $payments_insert[] = [
-                            'riskcheck_id'               => $riskcheck->id,
-                            'riskcheck_payment_types_id' => $this->payment_types[$key],
-                        ];
-                    }
+    /**
+     * Modifies and returns the collection result if modifiers are set
+     * such as an orderBy.
+     *
+     * @param  Collection  $collection
+     *
+     * @return Collection
+     */
+    protected function postCollectionModifiers(Collection $collection)
+    {
+        if ($this->getOrderByField() && $this->getOrderByDirection()) {
+            $field = $this->getOrderByField();
+            $desc  = false;
 
+            if ($this->getOrderByDirection() === 'desc') {
+                $desc = true;
+            }
+
+            $sorted = $collection->sortBy(function ($entry) use ($field) {
+                if (property_exists($entry, $field)) {
+                    return $entry->{$field};
                 }
-                if (count($payments_insert)) {
-                    // insert data
-                    DB::table($this->riskcheck_payments_table)->insert($payments_insert);
-                }
+            }, SORT_NATURAL, $desc);
+
+            return $sorted;
+        }
+
+        return $collection;
+    }
+
+    /**
+     * Returns the current page from the current input. Used for pagination.
+     *
+     * @param  int    $currentPage
+     * @param  array  $options  [path => '', query => [], fragment => '', pageName => '']
+     *
+     * @return int
+     */
+    protected function getPageFromInput($currentPage = null, array $options = [])
+    {
+        if (is_numeric($currentPage)) {
+            return intval($currentPage);
+        }
+
+        $pageName = (array_key_exists('pageName', $options)) ? $options['pageName'] : 'page';
+
+        $page = $this->request->input($pageName);
+
+        if (is_numeric($page)) {
+            return intval($page);
+        }
+
+        return 1;
+    }
+
+    /**
+     * Parses the content of the file separating the errors into a single array.
+     *
+     * @param  string  $content
+     * @param  string  $allowedEnvironment
+     * @param  array   $allowedLevel
+     *
+     * @return array
+     */
+    protected function parseLog($content, $allowedEnvironment = null, $allowedLevel = [])
+    {
+        $log = [];
+
+        $parsed = $this->parser->parseLogContent($content);
+
+        extract($parsed, EXTR_PREFIX_ALL, 'parsed');
+
+        if (empty($parsed_headerSet)) {
+            return $log;
+        }
+
+        $needReFormat = in_array('Next', $parsed_headerSet);
+        $newContent   = null;
+
+        foreach ($parsed_headerSet as $key => $header) {
+            if (empty($parsed_dateSet[$key])) {
+                $parsed_dateSet[$key]  = $parsed_dateSet[$key - 1];
+                $parsed_envSet[$key]   = $parsed_envSet[$key - 1];
+                $parsed_levelSet[$key] = $parsed_levelSet[$key - 1];
+                $header                = str_replace("Next", $parsed_headerSet[$key - 1], $header);
+            }
+
+            $newContent .= $header . ' ' . $parsed_bodySet[$key];
+
+            if ((empty($allowedEnvironment) || $allowedEnvironment == $parsed_envSet[$key]) && $this->levelable->filter($parsed_levelSet[$key], $allowedLevel)) {
+                $log[] = [
+                    'environment' => $parsed_envSet[$key],
+                    'level'       => $parsed_levelSet[$key],
+                    'date'        => $parsed_dateSet[$key],
+                    'file_path'   => $this->getCurrentLogPath(),
+                    'header'      => $header,
+                    'body'        => $parsed_bodySet[$key],
+                ];
             }
         }
-    }
 
-    /**
-     * parsing timeouts in riskcheck log files
-     * @param  String  $filepath
-     * @return LogReader object with parsed specific log file
-     */
-    protected function parseTimeOutFile($filepath)
-    {
-        // get module logParser
-        $parser = new \App\Modules\RSSRiskcheckMonitoring\Classes\TimoutLogParser;
-        //set the logParser
-        LogReader::setLogParser($parser);
-        //set the log path, value was saved over the module provider
-        LogReader::setLogPath(Storage::disk('riskchecks')->path(null));
-
-        // return the parsed Log file
-        return LogReader::filename($filepath)->get();
-    }
-
-    /**
-     * injecting timeouts
-     * @param  Illuminate\Support\Collection  $timeouts
-     * @param  App\Modules\RSSRiskcheckMonitoring\Models\Riskcheck\RiskcheckFile  $file
-     * @return null
-     */
-    protected function injectTimeouts($timeouts, $file)
-    {
-        foreach ($timeouts as $timeout) {
-
-            // decode json body context
-            $context = json_decode($timeout->getAttribute('context'));
-
-            // create Model
-            $timeout = [
-                'file_id'     => $file->id,
-                'requestTime' => Carbon::createFromFormat('Y-m-d H:i:s', $timeout->date, 'GMT'),
-            ];
-
-            $timeout = Pi::Model('RSSRiskcheckMonitoring::Timeout')->create($timeout);
+        if ($needReFormat) {
+            file_put_contents($this->getCurrentLogPath(), $newContent);
         }
+
+        return $log;
+    }
+
+    /**
+     * Retrieves all the data inside each log file from the log file list.
+     *
+     * @return array|bool
+     */
+    protected function getLogFiles()
+    {
+        $data = [];
+
+        $files = $this->getLogFileList();
+
+        if (is_array($files)) {
+            $count = 0;
+
+            foreach ($files as $file) {
+                $data[$count]['contents'] = Storage::disk('riskchecks')->get($file);
+                $data[$count]['path']     = $file;
+                $count++;
+            }
+
+            return $data;
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns an array of log file paths.
+     *
+     * @param  null|string  $forceName
+     *
+     * @return bool|array
+     */
+    protected function getLogFileList($forceName = null)
+    {
+        $path = $this->getLogPath();
+
+        return Storage::disk($this->getLogDisk())->allFiles($path);
+
+        // if (is_dir($path)) {
+
+        //    /*
+        //     * Matches files in the log directory with the special name'
+        //     */
+        //    $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $this->getLogFilename());
+
+        //    /*
+        //     * Force matches all files in the log directory'
+        //     */
+        //    if (!is_null($forceName)) {
+        //        $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $forceName);
+        //    }
+
+        //    return glob($logPath, GLOB_BRACE);
+        //}
+
+        return false;
     }
 }
