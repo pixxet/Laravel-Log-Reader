@@ -4,14 +4,25 @@ return array(
 
     /*
     |--------------------------------------------------------------------------
+    | Disk the log files directory stored on.
+    |--------------------------------------------------------------------------
+    |
+    | This is disk the directory storing your log files is on
+    |
+     */
+
+    'disk'               => 'base',
+
+    /*
+    |--------------------------------------------------------------------------
     | Path to directory for storing log files
     |--------------------------------------------------------------------------
     |
     | This is path to directory storing your log files
     |
-    */
+     */
 
-    'path' => storage_path('logs'),
+    'path'               => storage_path('logs'),
 
     /*
     |--------------------------------------------------------------------------
@@ -24,9 +35,9 @@ return array(
     | function in PHP, it's mean you can set '*.*' to read all log
     | files
     |
-    */
+     */
 
-    'filename' => null,
+    'filename'           => null,
 
     /*
     |--------------------------------------------------------------------------
@@ -37,9 +48,9 @@ return array(
     | environment. Example: local, product... You can set null if want
     | read from all environment
     |
-    */
+     */
 
-    'environment' => null,
+    'environment'        => null,
 
     /*
     |--------------------------------------------------------------------------
@@ -50,9 +61,9 @@ return array(
     | specify levels. Example: ['error', 'warning']. You can set null
     | if want read from all levels.
     |
-    */
+     */
 
-    'level' => null,
+    'level'              => null,
 
     /*
     |--------------------------------------------------------------------------
@@ -61,9 +72,9 @@ return array(
     |
     | This is default field to sort by when reading
     |
-    */
+     */
 
-    'order_by_field' => 'date',
+    'order_by_field'     => 'date',
 
     /*
     |--------------------------------------------------------------------------
@@ -72,8 +83,8 @@ return array(
     |
     | This is default direction to sort by when reading
     |
-    */
+     */
 
-    'order_by_direction' => 'asc'
+    'order_by_direction' => 'asc',
 
 );
