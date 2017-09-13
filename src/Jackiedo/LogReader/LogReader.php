@@ -805,25 +805,25 @@ class LogReader
     protected function getLogFileList($forceName = null)
     {
         $path = $this->getLogPath();
+        $name = $forceName ?: $this->getLogFilename();
 
-        return Storage::disk($this->getLogDisk())->allFiles($path);
+        // debug value
+        // $name = '*.log';
 
-        // if (is_dir($path)) {
+        if (preg_match('/\*/', $name)) {
 
-        //    /*
-        //     * Matches files in the log directory with the special name'
-        //     */
-        //    $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $this->getLogFilename());
+            //define name regex
+            $name = preg_replace('/\*/', '.*', preg_quote($name));
 
-        //    /*
-        //     * Force matches all files in the log directory'
-        //     */
-        //    if (!is_null($forceName)) {
-        //        $logPath = sprintf('%s%s%s', $path, DIRECTORY_SEPARATOR, $forceName);
-        //    }
+            // list all filenames in given path
+            $allFiles = Storage::files('');
 
-        //    return glob($logPath, GLOB_BRACE);
-        //}
+            // filter the ones that match the name regex
+            return preg_grep('/' . $name . '/', $allFiles);
+
+        } else if (Storage::disk($this->getLogDisk())->exists($name)) {
+            return [$name];
+        }
 
         return false;
     }
