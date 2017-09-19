@@ -784,7 +784,7 @@ class LogReader
             $count = 0;
 
             foreach ($files as $file) {
-                $data[$count]['contents'] = Storage::disk('riskchecks')->get($file);
+                $data[$count]['contents'] = Storage::disk($this->getLogDisk())->get($file);
                 $data[$count]['path']     = $file;
                 $count++;
             }
@@ -807,6 +807,8 @@ class LogReader
         $path = $this->getLogPath();
         $name = $forceName ?: $this->getLogFilename();
 
+        $path = preg_replace('/^' . addcslashes(preg_quote(Storage::disk($this->getLogDisk())->path('')), '/') . '/', '', $path);
+
         // debug value
         // $name = '*.log';
 
@@ -821,8 +823,9 @@ class LogReader
             // filter the ones that match the name regex
             return preg_grep('/' . $name . '/', $allFiles);
 
-        } else if (Storage::disk($this->getLogDisk())->exists($name)) {
-            return [$name];
+        } else if (Storage::disk($this->getLogDisk())->exists($path . DIRECTORY_SEPARATOR . $name)) {
+
+            return [$path . DIRECTORY_SEPARATOR . $name];
         }
 
         return false;
