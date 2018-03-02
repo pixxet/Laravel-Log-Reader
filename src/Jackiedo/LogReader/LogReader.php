@@ -763,7 +763,8 @@ class LogReader
         }
 
         if ($needReFormat) {
-            file_put_contents($this->getCurrentLogPath(), $newContent);
+			$logFile = Storage::disk($this->getLogDisk())->path($this->getCurrentLogPath());
+            file_put_contents($logFile, $newContent);
         }
 
         return $log;
@@ -811,9 +812,7 @@ class LogReader
 
         // debug value
         // $name = '*.log';
-
         if (preg_match('/\*/', $name)) {
-
             //define name regex
             $name = preg_replace('/\*/', '.*', preg_quote($name));
 
@@ -824,7 +823,6 @@ class LogReader
             return preg_grep('/' . $name . '/', $allFiles);
 
         } else if (Storage::disk($this->getLogDisk())->exists($path . DIRECTORY_SEPARATOR . $name)) {
-
             return [$path . DIRECTORY_SEPARATOR . $name];
         }
 
